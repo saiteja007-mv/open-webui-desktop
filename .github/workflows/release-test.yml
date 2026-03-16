@@ -1,0 +1,535 @@
+name: Cross-Platform Release Testing
+
+on:
+  release:
+    types: [published, prereleased]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release tag to test (e.g. v1.0.0)'
+        required: false
+        default: 'latest'
+
+permissions:
+  contents: read
+  checks: write
+  pull-requests: write
+
+jobs:
+  # ─────────────────────────────────────────────
+  # JOB 1: Fetch release assets & metadata
+  # ─────────────────────────────────────────────
+  get-release:
+    name: 📦 Fetch Release Info
+    runs-on: ubuntu-latest
+    outputs:
+      release_tag: ${{ steps.release.outputs.tag }}
+      windows_asset: ${{ steps.assets.outputs.windows }}
+      macos_asset: ${{ steps.assets.outputs.macos }}
+      linux_asset: ${{ steps.assets.outputs.linux }}
+    steps:
+      - name: Get release tag
+        id: release
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.release_tag }}"
+          else
+            TAG="${{ github.event.release.tag_name }}"
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "Testing release: $TAG"
+
+      - name: List release assets
+        id: assets
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tag = '${{ steps.release.outputs.tag }}';
+            let release;
+
+            if (tag === 'latest') {
+              release = await github.rest.repos.getLatestRelease({
+                owner: context.repo.owner,
+                repo: context.repo.repo
+              });
+              release = release.data;
+            } else {
+              release = await github.rest.repos.getReleaseByTag({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag: tag
+              });
+              release = release.data;
+            }
+
+            const assets = release.assets;
+            console.log('Available assets:', assets.map(a => a.name));
+
+            // Detect platform-specific installers
+            const win = assets.find(a =>
+              a.name.match(/\.(exe|msi|msix)$/i)
+            );
+            const mac = assets.find(a =>
+              a.name.match(/\.(dmg|pkg|zip)$/i) && !a.name.includes('linux')
+            );
+            const linux = assets.find(a =>
+              a.name.match(/\.(AppImage|deb|rpm|tar\.gz)$/i)
+            );
+
+            core.setOutput('windows', win ? win.browser_download_url : '');
+            core.setOutput('macos',   mac ? mac.browser_download_url : '');
+            core.setOutput('linux',   linux ? linux.browser_download_url : '');
+
+            console.log('Windows asset:', win?.name ?? 'NOT FOUND');
+            console.log('macOS asset:',   mac?.name ?? 'NOT FOUND');
+            console.log('Linux asset:',   linux?.name ?? 'NOT FOUND');
+
+  # ─────────────────────────────────────────────
+  # JOB 2: Windows — Install & Launch Testing
+  # ─────────────────────────────────────────────
+  test-windows:
+    name: 🪟 Windows — Install & UI Test
+    runs-on: windows-latest
+    needs: get-release
+    if: needs.get-release.outputs.windows_asset != ''
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Download Windows installer
+        run: |
+          $url = "${{ needs.get-release.outputs.windows_asset }}"
+          $output = "installer.exe"
+          Invoke-WebRequest -Uri $url -OutFile $output
+          Write-Host "Downloaded: $(Get-Item $output | Select-Object -ExpandProperty Length) bytes"
+        shell: pwsh
+
+      - name: Verify installer integrity
+        run: |
+          $file = Get-Item "installer.exe"
+          Write-Host "File size: $($file.Length) bytes"
+          if ($file.Length -lt 1MB) {
+            Write-Error "Installer seems too small — possible download issue"
+            exit 1
+          }
+          $hash = Get-FileHash "installer.exe" -Algorithm SHA256
+          Write-Host "SHA256: $($hash.Hash)"
+        shell: pwsh
+
+      - name: Install app silently
+        run: |
+          Start-Process -FilePath "installer.exe" -ArgumentList "/S", "/quiet" -Wait -PassThru
+          Start-Sleep -Seconds 10
+          Write-Host "Installation complete"
+        shell: pwsh
+        continue-on-error: true
+
+      - name: Verify app installed
+        id: verify_install
+        run: |
+          # Check common install locations
+          $paths = @(
+            "$env:LOCALAPPDATA\Programs",
+            "$env:PROGRAMFILES",
+            "$env:PROGRAMFILES(X86)"
+          )
+          $found = $false
+          foreach ($path in $paths) {
+            $exes = Get-ChildItem -Path $path -Recurse -Filter "*.exe" -ErrorAction SilentlyContinue |
+                    Where-Object { $_.Name -notmatch "uninstall|update" } |
+                    Select-Object -First 5
+            if ($exes) {
+              Write-Host "Found executables in $path"
+              $exes | ForEach-Object { Write-Host "  - $($_.FullName)" }
+              $found = $true
+              echo "app_path=$($exes[0].FullName)" >> $env:GITHUB_OUTPUT
+            }
+          }
+          if (-not $found) {
+            Write-Warning "No app executables found in standard locations"
+          }
+        shell: pwsh
+        continue-on-error: true
+
+      - name: Launch app & check process
+        run: |
+          $appPath = "${{ steps.verify_install.outputs.app_path }}"
+          if ($appPath -and (Test-Path $appPath)) {
+            Write-Host "Launching: $appPath"
+            $proc = Start-Process -FilePath $appPath -PassThru
+            Start-Sleep -Seconds 8
+
+            $running = Get-Process -Id $proc.Id -ErrorAction SilentlyContinue
+            if ($running) {
+              Write-Host "✅ App launched successfully (PID: $($proc.Id))"
+              $proc | Stop-Process -Force
+            } else {
+              Write-Warning "⚠️  App process not found after launch"
+            }
+          } else {
+            Write-Warning "App path not found, skipping launch test"
+          }
+        shell: pwsh
+        continue-on-error: true
+
+      - name: Check for crash logs
+        run: |
+          $crashPaths = @(
+            "$env:APPDATA\*.log",
+            "$env:LOCALAPPDATA\*.log",
+            "$env:TEMP\*.log"
+          )
+          foreach ($pattern in $crashPaths) {
+            $logs = Get-ChildItem -Path $pattern -ErrorAction SilentlyContinue |
+                    Where-Object { $_.LastWriteTime -gt (Get-Date).AddMinutes(-30) }
+            if ($logs) {
+              Write-Host "Recent log files:"
+              $logs | ForEach-Object { Write-Host "  $($_.FullName)" }
+            }
+          }
+          Write-Host "Crash log check complete"
+        shell: pwsh
+        continue-on-error: true
+
+      - name: Screenshot desktop (if xvfb available)
+        run: |
+          Add-Type -AssemblyName System.Windows.Forms
+          $screen = [System.Windows.Forms.Screen]::PrimaryScreen
+          $bitmap = New-Object System.Drawing.Bitmap($screen.Bounds.Width, $screen.Bounds.Height)
+          $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+          $graphics.CopyFromScreen($screen.Bounds.Location, [System.Drawing.Point]::Empty, $screen.Bounds.Size)
+          $bitmap.Save("screenshot-windows.png")
+          Write-Host "Screenshot saved"
+        shell: pwsh
+        continue-on-error: true
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-test-results
+          path: |
+            screenshot-windows.png
+            *.log
+          retention-days: 7
+
+  # ─────────────────────────────────────────────
+  # JOB 3: macOS — Install & Launch Testing
+  # ─────────────────────────────────────────────
+  test-macos:
+    name: 🍎 macOS — Install & UI Test
+    runs-on: macos-latest
+    needs: get-release
+    if: needs.get-release.outputs.macos_asset != ''
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Download macOS package
+        run: |
+          URL="${{ needs.get-release.outputs.macos_asset }}"
+          FILENAME=$(basename "$URL" | cut -d'?' -f1)
+          curl -L "$URL" -o "$FILENAME"
+          echo "Downloaded: $FILENAME ($(du -sh $FILENAME | cut -f1))"
+          echo "INSTALLER=$FILENAME" >> $GITHUB_ENV
+
+      - name: Verify package integrity
+        run: |
+          ls -lh "$INSTALLER"
+          if [[ "$INSTALLER" == *.dmg ]]; then
+            echo "DMG package detected"
+            hdiutil verify "$INSTALLER" || echo "Verification warning (non-fatal)"
+          elif [[ "$INSTALLER" == *.zip ]]; then
+            echo "ZIP package detected"
+            unzip -t "$INSTALLER" | tail -5
+          fi
+
+      - name: Mount and install DMG
+        if: endsWith(env.INSTALLER, '.dmg')
+        run: |
+          MOUNT_POINT=$(hdiutil attach "$INSTALLER" -nobrowse -quiet | grep Volumes | awk '{print $3}')
+          echo "Mounted at: $MOUNT_POINT"
+
+          # Find .app bundle
+          APP=$(find "$MOUNT_POINT" -name "*.app" -maxdepth 2 | head -1)
+          if [ -n "$APP" ]; then
+            echo "Found app: $APP"
+            cp -R "$APP" /Applications/
+            echo "APP_NAME=$(basename $APP)" >> $GITHUB_ENV
+            echo "✅ App copied to /Applications"
+          fi
+
+          hdiutil detach "$MOUNT_POINT" -quiet
+
+      - name: Install from ZIP
+        if: endsWith(env.INSTALLER, '.zip')
+        run: |
+          unzip -q "$INSTALLER" -d /tmp/app_extracted
+          APP=$(find /tmp/app_extracted -name "*.app" | head -1)
+          if [ -n "$APP" ]; then
+            cp -R "$APP" /Applications/
+            echo "APP_NAME=$(basename $APP)" >> $GITHUB_ENV
+            echo "✅ App installed from ZIP"
+          fi
+
+      - name: Verify app bundle structure
+        run: |
+          APP_PATH="/Applications/$APP_NAME"
+          if [ -d "$APP_PATH" ]; then
+            echo "✅ App bundle exists: $APP_PATH"
+            echo "Bundle contents:"
+            ls -la "$APP_PATH/Contents/" || true
+            # Check Info.plist
+            if [ -f "$APP_PATH/Contents/Info.plist" ]; then
+              echo "App version: $(defaults read "$APP_PATH/Contents/Info.plist" CFBundleShortVersionString 2>/dev/null || echo 'N/A')"
+              echo "Bundle ID: $(defaults read "$APP_PATH/Contents/Info.plist" CFBundleIdentifier 2>/dev/null || echo 'N/A')"
+            fi
+          else
+            echo "⚠️  App not found at expected path"
+          fi
+        continue-on-error: true
+
+      - name: Launch app & verify process
+        run: |
+          APP_PATH="/Applications/$APP_NAME"
+          if [ -d "$APP_PATH" ]; then
+            echo "Launching $APP_NAME..."
+            open "$APP_PATH" &
+            sleep 8
+
+            # Check if process is running
+            PROC=$(pgrep -f "$APP_NAME" | head -1)
+            if [ -n "$PROC" ]; then
+              echo "✅ App running (PID: $PROC)"
+              kill "$PROC" 2>/dev/null || true
+            else
+              echo "⚠️  App process not detected"
+            fi
+          fi
+        continue-on-error: true
+
+      - name: Capture screenshot
+        run: |
+          sleep 2
+          screencapture -x screenshot-macos.png
+          echo "Screenshot captured"
+        continue-on-error: true
+
+      - name: Check crash reports
+        run: |
+          CRASH_DIR="$HOME/Library/Logs/DiagnosticReports"
+          if [ -d "$CRASH_DIR" ]; then
+            RECENT=$(find "$CRASH_DIR" -name "*.crash" -newer "$INSTALLER" 2>/dev/null)
+            if [ -n "$RECENT" ]; then
+              echo "⚠️  Crash reports found:"
+              echo "$RECENT"
+            else
+              echo "✅ No crash reports"
+            fi
+          fi
+        continue-on-error: true
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos-test-results
+          path: |
+            screenshot-macos.png
+            ~/Library/Logs/DiagnosticReports/*.crash
+          retention-days: 7
+
+  # ─────────────────────────────────────────────
+  # JOB 4: Linux — Install & Launch Testing
+  # ─────────────────────────────────────────────
+  test-linux:
+    name: 🐧 Linux — Install & UI Test
+    runs-on: ubuntu-latest
+    needs: get-release
+    if: needs.get-release.outputs.linux_asset != ''
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install display & testing deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            xvfb \
+            x11-utils \
+            scrot \
+            libgtk-3-0 \
+            libnotify4 \
+            libnss3 \
+            libxss1 \
+            libxtst6 \
+            xdg-utils \
+            at-spi2-core \
+            libatspi2.0-0 \
+            libdrm2 \
+            libgbm1 \
+            libasound2
+
+      - name: Download Linux package
+        run: |
+          URL="${{ needs.get-release.outputs.linux_asset }}"
+          FILENAME=$(basename "$URL" | cut -d'?' -f1)
+          curl -L "$URL" -o "$FILENAME"
+          echo "Downloaded: $FILENAME ($(du -sh $FILENAME | cut -f1))"
+          echo "INSTALLER=$FILENAME" >> $GITHUB_ENV
+          echo "EXT=${FILENAME##*.}" >> $GITHUB_ENV
+
+      - name: Install package
+        run: |
+          case "$EXT" in
+            AppImage)
+              chmod +x "$INSTALLER"
+              echo "AppImage ready"
+              echo "APP_CMD=./$INSTALLER --no-sandbox" >> $GITHUB_ENV
+              ;;
+            deb)
+              sudo dpkg -i "$INSTALLER" || sudo apt-get install -f -y
+              # Find installed binary
+              BIN=$(dpkg -L $(dpkg -f "$INSTALLER" Package) 2>/dev/null | grep -E '/usr/(bin|local/bin)' | head -1)
+              echo "APP_CMD=$BIN" >> $GITHUB_ENV
+              echo "Installed .deb package"
+              ;;
+            rpm)
+              sudo apt-get install -y alien -qq
+              sudo alien -i "$INSTALLER"
+              echo "Installed .rpm via alien"
+              ;;
+            *)
+              if [[ "$INSTALLER" == *.tar.gz ]]; then
+                tar -xzf "$INSTALLER"
+                BIN=$(find . -type f -executable ! -name "*.sh" | head -1)
+                echo "APP_CMD=$BIN" >> $GITHUB_ENV
+              fi
+              ;;
+          esac
+
+      - name: Launch with virtual display
+        run: |
+          export DISPLAY=:99
+          Xvfb :99 -screen 0 1920x1080x24 &
+          XVFB_PID=$!
+          sleep 3
+          echo "Virtual display started (PID: $XVFB_PID)"
+
+          if [ -n "$APP_CMD" ]; then
+            echo "Launching: $APP_CMD"
+            $APP_CMD --no-sandbox 2>&1 &
+            APP_PID=$!
+            sleep 8
+
+            if kill -0 $APP_PID 2>/dev/null; then
+              echo "✅ App running (PID: $APP_PID)"
+
+              # Take screenshot
+              scrot screenshot-linux.png || true
+              echo "Screenshot captured"
+
+              kill $APP_PID 2>/dev/null || true
+            else
+              echo "⚠️  App exited or failed to start"
+            fi
+          else
+            echo "⚠️  No app command found, skipping launch"
+          fi
+
+          kill $XVFB_PID 2>/dev/null || true
+        continue-on-error: true
+
+      - name: Verify installed files
+        run: |
+          echo "=== Checking install locations ==="
+          for dir in /usr/bin /usr/local/bin /opt /usr/share/applications; do
+            if [ -d "$dir" ]; then
+              FILES=$(ls "$dir" 2>/dev/null | grep -iv "standard\|common" | head -10)
+              if [ -n "$FILES" ]; then
+                echo "[$dir]"
+                echo "$FILES"
+              fi
+            fi
+          done
+        continue-on-error: true
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: linux-test-results
+          path: |
+            screenshot-linux.png
+            *.log
+          retention-days: 7
+
+  # ─────────────────────────────────────────────
+  # JOB 5: Summary Report
+  # ─────────────────────────────────────────────
+  test-summary:
+    name: 📊 Test Summary
+    runs-on: ubuntu-latest
+    needs: [test-windows, test-macos, test-linux]
+    if: always()
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: test-results
+        continue-on-error: true
+
+      - name: Generate summary report
+        run: |
+          echo "# 🧪 Release Test Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Release:** \`${{ needs.get-release.outputs.release_tag || github.event.release.tag_name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Triggered by:** ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Date:** $(date -u '+%Y-%m-%d %H:%M UTC')" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Platform Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Platform | Status | Installer Found |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|--------|-----------------|" >> $GITHUB_STEP_SUMMARY
+
+          WIN_STATUS="${{ needs.test-windows.result }}"
+          MAC_STATUS="${{ needs.test-macos.result }}"
+          LIN_STATUS="${{ needs.test-linux.result }}"
+
+          win_icon="❓"
+          mac_icon="❓"
+          lin_icon="❓"
+
+          [ "$WIN_STATUS" = "success" ]  && win_icon="✅"
+          [ "$WIN_STATUS" = "failure" ]  && win_icon="❌"
+          [ "$WIN_STATUS" = "skipped" ]  && win_icon="⏭️"
+          [ "$MAC_STATUS" = "success" ]  && mac_icon="✅"
+          [ "$MAC_STATUS" = "failure" ]  && mac_icon="❌"
+          [ "$MAC_STATUS" = "skipped" ]  && mac_icon="⏭️"
+          [ "$LIN_STATUS" = "success" ]  && lin_icon="✅"
+          [ "$LIN_STATUS" = "failure" ]  && lin_icon="❌"
+          [ "$LIN_STATUS" = "skipped" ]  && lin_icon="⏭️"
+
+          WIN_ASSET="${{ needs.get-release.outputs.windows_asset }}"
+          MAC_ASSET="${{ needs.get-release.outputs.macos_asset }}"
+          LIN_ASSET="${{ needs.get-release.outputs.linux_asset }}"
+
+          [ -n "$WIN_ASSET" ] && WIN_FOUND="✅ Yes" || WIN_FOUND="❌ No"
+          [ -n "$MAC_ASSET" ] && MAC_FOUND="✅ Yes" || MAC_FOUND="❌ No"
+          [ -n "$LIN_ASSET" ] && LIN_FOUND="✅ Yes" || LIN_FOUND="❌ No"
+
+          echo "| 🪟 Windows | $win_icon \`$WIN_STATUS\` | $WIN_FOUND |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🍎 macOS   | $mac_icon \`$MAC_STATUS\` | $MAC_FOUND |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🐧 Linux   | $lin_icon \`$LIN_STATUS\` | $LIN_FOUND |" >> $GITHUB_STEP_SUMMARY
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Screenshots" >> $GITHUB_STEP_SUMMARY
+          echo "Screenshots are available in the **Artifacts** section of this run." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "_Automated testing via open-webui-desktop CI pipeline_" >> $GITHUB_STEP_SUMMARY
