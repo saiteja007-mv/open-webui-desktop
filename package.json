@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "productName": "Open WebUI Desktop",
   "description": "Standalone desktop app for Open WebUI — automatically installs and runs the AI interface.",
+  "author": "Open WebUI Desktop",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
@@ -16,7 +17,8 @@
   },
   "devDependencies": {
     "electron": "^33.0.0",
-    "electron-builder": "^25.1.8"
+    "electron-builder": "^25.1.8",
+    "sharp": "^0.34.5"
   },
   "build": {
     "appId": "com.openwebui.desktop",
@@ -38,15 +40,29 @@
       {
         "from": "assets/",
         "to": "assets/",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "win": {
       "target": [
-        { "target": "nsis", "arch": ["x64"] },
-        { "target": "portable", "arch": ["x64"] }
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
       ],
-      "icon": "assets/icon.png"
+      "icon": "assets/icon.png",
+      "sign": null,
+      "signingHashAlgorithms": null
     },
     "nsis": {
       "oneClick": true,
@@ -57,13 +73,22 @@
     },
     "mac": {
       "target": [
-        { "target": "dmg", "arch": ["x64", "arm64"] }
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
       ],
       "icon": "assets/icon.png",
       "category": "public.app-category.productivity"
     },
     "linux": {
-      "target": ["AppImage", "deb"],
+      "target": [
+        "AppImage",
+        "deb"
+      ],
       "icon": "assets/icon.png",
       "category": "Development"
     }
