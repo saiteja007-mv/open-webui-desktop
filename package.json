@@ -3,7 +3,10 @@
   "version": "1.0.0",
   "productName": "Open WebUI Desktop",
   "description": "Standalone desktop app for Open WebUI — automatically installs and runs the AI interface.",
-  "author": "Open WebUI Desktop",
+  "author": {
+    "name": "Open WebUI Desktop",
+    "email": "noreply@openwebui.com"
+  },
   "main": "main.js",
   "scripts": {
     "start": "electron .",
