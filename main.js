@@ -4,6 +4,17 @@ const { app, BrowserWindow, ipcMain, Tray, Menu, shell, nativeImage, dialog } = 
 const path = require('path');
 const fs = require('fs');
 
+// ─── Linux Compatibility Flags ───────────────────────────────────────────────
+// Must be called before app is ready.
+// Fixes: chrome-sandbox SUID permissions, AppArmor restrictions, GPU launch failures.
+if (process.platform === 'linux') {
+  app.commandLine.appendSwitch('no-sandbox');
+  app.commandLine.appendSwitch('disable-dev-shm-usage');
+  app.commandLine.appendSwitch('disable-gpu-sandbox');
+  // Gracefully fall back to software rendering if GPU process fails
+  app.commandLine.appendSwitch('disable-gpu');
+}
+
 // Modules — loaded after app path is available
 let utils, pythonManager, venvManager, serverManager, store;
 
