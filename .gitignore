@@ -1,0 +1,6 @@
+node_modules/
+dist/
+.venv/
+*.log
+.webui_secret_key
+build/

@@ -1,0 +1,71 @@
+{
+  "name": "open-webui-desktop",
+  "version": "1.0.0",
+  "productName": "Open WebUI Desktop",
+  "description": "Standalone desktop app for Open WebUI — automatically installs and runs the AI interface.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build:win": "electron-builder --win",
+    "build:mac": "electron-builder --mac",
+    "build:linux": "electron-builder --linux",
+    "build:all": "electron-builder --win --mac --linux"
+  },
+  "dependencies": {
+    "electron-store": "^8.2.0"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.openwebui.desktop",
+    "productName": "Open WebUI Desktop",
+    "copyright": "Copyright © 2025 Open WebUI Desktop",
+    "directories": {
+      "buildResources": "assets",
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "src/**/*",
+      "scripts/**/*",
+      "assets/**/*",
+      "node_modules/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "assets/",
+        "to": "assets/",
+        "filter": ["**/*"]
+      }
+    ],
+    "win": {
+      "target": [
+        { "target": "nsis", "arch": ["x64"] },
+        { "target": "portable", "arch": ["x64"] }
+      ],
+      "icon": "assets/icon.png"
+    },
+    "nsis": {
+      "oneClick": true,
+      "allowToChangeInstallationDirectory": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Open WebUI Desktop"
+    },
+    "mac": {
+      "target": [
+        { "target": "dmg", "arch": ["x64", "arm64"] }
+      ],
+      "icon": "assets/icon.png",
+      "category": "public.app-category.productivity"
+    },
+    "linux": {
+      "target": ["AppImage", "deb"],
+      "icon": "assets/icon.png",
+      "category": "Development"
+    }
+  }
+}

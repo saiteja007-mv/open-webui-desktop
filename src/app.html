@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' http://localhost:* ws://localhost:*; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data:;" />
+  <title>Open WebUI Desktop</title>
+  <link rel="stylesheet" href="app.css" />
+</head>
+<body>
+  <!-- Loading Screen -->
+  <div id="loading-screen">
+    <div class="loading-content">
+      <div class="logo-anim">
+        <img src="../assets/icon.png" alt="Open WebUI" />
+      </div>
+      <p class="loading-title">Open WebUI</p>
+      <p id="loading-status" class="loading-status">Starting server...</p>
+      <div class="loading-ring"></div>
+    </div>
+  </div>
+
+  <!-- Error Screen -->
+  <div id="error-screen" class="hidden">
+    <div class="error-content">
+      <div class="error-icon">⚠</div>
+      <h2 class="error-title">Server Failed to Start</h2>
+      <p id="error-msg" class="error-msg">The Open WebUI server could not be started.</p>
+      <div class="error-actions">
+        <button class="btn btn-primary" onclick="restartServer()">
+          ↺ Restart Server
+        </button>
+        <button class="btn btn-ghost" onclick="showLogs()">View Logs</button>
+        <button class="btn btn-ghost" onclick="reinstall()">Reinstall</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- WebView (full screen) -->
+  <webview
+    id="webview"
+    class="hidden"
+    src="about:blank"
+    webpreferences="contextIsolation=yes"
+  ></webview>
+
+  <!-- Settings button (floats over webview) -->
+  <button id="settings-fab" class="settings-fab hidden" onclick="toggleSettingsMenu()" title="App settings">⚙</button>
+
+  <!-- Settings dropdown -->
+  <div id="settings-menu" class="settings-menu hidden">
+    <button class="settings-menu-item settings-menu-item-danger" onclick="confirmUninstall()">
+      <span>🗑</span> Uninstall Open WebUI
+    </button>
+    <button class="settings-menu-item" onclick="showLogs()">
+      <span>📄</span> View Logs
+    </button>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
