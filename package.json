@@ -1,6 +1,6 @@
 {
   "name": "open-webui-desktop",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "productName": "Open WebUI Desktop",
   "description": "Standalone desktop app for Open WebUI — automatically installs and runs the AI interface.",
   "author": {
@@ -99,7 +99,10 @@
     "deb": {
       "packageName": "open-webui-desktop",
       "afterInstall": "build/linux-postinstall.sh",
-      "depends": ["libgtk-3-0", "libnotify4", "libnss3", "libxss1", "libxtst6", "xdg-utils", "libatspi2.0-0", "libuuid1", "libsecret-1-0"]
+      "depends": ["libgtk-3-0", "libnotify4", "libnss3", "libxss1", "libxtst6", "xdg-utils", "libatspi2.0-0", "libuuid1", "libsecret-1-0"],
+      "desktop": {
+        "entry": "build/open-webui-desktop.desktop"
+      }
     },
     "appImage": {
       "artifactName": "${productName}-${version}.${ext}"

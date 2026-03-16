@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Open WebUI Desktop
+Comment=Your local AI interface — fully private, fully yours
+GenericName=AI Interface
+Exec=/usr/bin/open-webui-desktop %U
+Terminal=false
+Type=Application
+Icon=open-webui-desktop
+StartupWMClass=open-webui-desktop
+StartupNotify=true
+Categories=Utility;Network;Science;
+Keywords=AI;chat;local;openwebui;llm;
