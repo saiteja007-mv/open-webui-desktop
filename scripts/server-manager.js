@@ -9,12 +9,19 @@ const { isWindows, getPythonPath, getOpenWebuiBinPath, getDataDir, getSecretKeyP
 let serverProcess = null;
 let serverPort = 8080;
 let serverReady = false;
+let lastChildActivityAt = 0;
 let logListeners = [];
 let readyListeners = [];
 let stateListeners = [];
 
 const POLL_INTERVAL_MS = 1000;
-const SERVER_TIMEOUT_MS = 120000; // 2 minutes
+// Overall hard cap. First run downloads ~90MB embedding model
+// (sentence-transformers/all-MiniLM-L6-v2) from HuggingFace before opening
+// the HTTP port, which can take several minutes on slow connections.
+const SERVER_TIMEOUT_MS = 600000; // 10 minutes
+// If the child is still producing output we consider it alive and extend the
+// deadline — only an actually-stuck process should trip the timeout.
+const STALL_TIMEOUT_MS = 180000; // 3 minutes of silence = stalled
 
 /**
  * Load or generate the secret key
@@ -71,13 +78,21 @@ function isPortAvailable(port) {
 /**
  * Poll the server until it responds
  */
-function pollServerReady(port, timeoutMs) {
+function pollServerReady(port, timeoutMs, stallTimeoutMs) {
   return new Promise((resolve, reject) => {
     const start = Date.now();
     const interval = setInterval(() => {
-      if (Date.now() - start > timeoutMs) {
+      const now = Date.now();
+      // Hard cap
+      if (now - start > timeoutMs) {
         clearInterval(interval);
-        reject(new Error(`Server did not start within ${timeoutMs / 1000} seconds`));
+        reject(new Error(`Server did not start within ${Math.round(timeoutMs / 1000)} seconds`));
+        return;
+      }
+      // Stall detection — child has produced no output for too long
+      if (stallTimeoutMs && lastChildActivityAt && now - lastChildActivityAt > stallTimeoutMs) {
+        clearInterval(interval);
+        reject(new Error(`Server appears stalled — no output for ${Math.round(stallTimeoutMs / 1000)}s`));
         return;
       }
       const req = http.request({ hostname: '127.0.0.1', port, path: '/', timeout: 2000 }, (res) => {
@@ -149,7 +164,10 @@ async function startServer() {
     windowsHide: true,
   });
 
+  lastChildActivityAt = Date.now();
+
   serverProcess.stdout?.on('data', (data) => {
+    lastChildActivityAt = Date.now();
     const text = data.toString();
     text.split('\n').forEach((line) => {
       if (line.trim()) {
@@ -160,6 +178,7 @@ async function startServer() {
   });
 
   serverProcess.stderr?.on('data', (data) => {
+    lastChildActivityAt = Date.now();
     const text = data.toString();
     text.split('\n').forEach((line) => {
       if (line.trim()) {
@@ -183,7 +202,7 @@ async function startServer() {
 
   // Poll until ready
   try {
-    await pollServerReady(serverPort, SERVER_TIMEOUT_MS);
+    await pollServerReady(serverPort, SERVER_TIMEOUT_MS, STALL_TIMEOUT_MS);
     serverReady = true;
     log(`Server ready on port ${serverPort}`);
     emit('ready', { port: serverPort, url: `http://localhost:${serverPort}` });
