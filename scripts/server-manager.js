@@ -15,13 +15,11 @@ let readyListeners = [];
 let stateListeners = [];
 
 const POLL_INTERVAL_MS = 1000;
-// Overall hard cap. First run downloads ~90MB embedding model
-// (sentence-transformers/all-MiniLM-L6-v2) from HuggingFace before opening
-// the HTTP port, which can take several minutes on slow connections.
-const SERVER_TIMEOUT_MS = 600000; // 10 minutes
-// If the child is still producing output we consider it alive and extend the
-// deadline — only an actually-stuck process should trip the timeout.
-const STALL_TIMEOUT_MS = 180000; // 3 minutes of silence = stalled
+// Overall hard cap. With embedding-model preload disabled, startup is normally
+// well under a minute — keep a generous ceiling as a safety net only.
+const SERVER_TIMEOUT_MS = 180000; // 3 minutes
+// Only trip on actual stalls: no child output for this long = stuck.
+const STALL_TIMEOUT_MS = 90000; // 90 seconds of silence = stalled
 
 /**
  * Load or generate the secret key
@@ -141,6 +139,20 @@ async function startServer() {
     WEBUI_SECRET_KEY: secretKey,
     PORT: String(serverPort),
     HOST: '127.0.0.1',
+    // ── Fast-start: skip HuggingFace model downloads on launch ─────────────
+    // Open WebUI otherwise fetches ~90MB (sentence-transformers/all-MiniLM-L6-v2
+    // + a reranker) during lifespan startup, which adds minutes to first-run.
+    // Switching the embedding engine away from the empty default makes it skip
+    // SentenceTransformer load entirely. The user can switch back to local
+    // embeddings from Admin → Settings → Documents once the app is open.
+    RAG_EMBEDDING_ENGINE: 'ollama',
+    RAG_RERANKING_ENGINE: 'ollama',
+    RAG_EMBEDDING_MODEL_AUTO_UPDATE: 'False',
+    RAG_RERANKING_MODEL_AUTO_UPDATE: 'False',
+    // Don't auto-pull LLM models either on first boot
+    OFFLINE_MODE: 'False', // keep API calls possible; only block auto-model-pulls
+    // Silence the Windows symlink cache warning that spams stderr first run
+    HF_HUB_DISABLE_SYMLINKS_WARNING: '1',
   };
 
   // Prefer the open-webui CLI script installed in the venv (correct entry point).
