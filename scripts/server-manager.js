@@ -146,6 +146,7 @@ async function startServer() {
     env,
     detached: false,
     stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true,
   });
 
   serverProcess.stdout?.on('data', (data) => {

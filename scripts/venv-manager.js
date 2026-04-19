@@ -32,7 +32,7 @@ async function createVenv(pythonPath, onProgress) {
 
   return new Promise((resolve, reject) => {
     // Try python -m venv first
-    const proc = spawn(pythonPath, ['-m', 'venv', venvPath]);
+    const proc = spawn(pythonPath, ['-m', 'venv', venvPath], { windowsHide: true });
 
     proc.stdout?.on('data', (data) => {
       const text = data.toString().trim();
@@ -54,6 +54,10 @@ async function createVenv(pythonPath, onProgress) {
         try {
           const uvPath = getUvPath();
           if (fileExists(uvPath)) {
+            // Clear any partial venv before retrying, so uv doesn't reject a half-built tree
+            if (fs.existsSync(venvPath)) {
+              try { fs.rmSync(venvPath, { recursive: true, force: true }); } catch (_) {}
+            }
             await fallbackUvVenv(uvPath, venvPath, onProgress);
             resolve(venvPath);
           } else {
@@ -72,7 +76,7 @@ async function createVenv(pythonPath, onProgress) {
 
 async function fallbackUvVenv(uvPath, venvPath, onProgress) {
   return new Promise((resolve, reject) => {
-    const proc = spawn(uvPath, ['venv', venvPath, '--python', '3.11']);
+    const proc = spawn(uvPath, ['venv', venvPath, '--python', '3.11'], { windowsHide: true });
     proc.stdout?.on('data', (d) => onProgress({ type: 'log', text: d.toString().trim() }));
     proc.stderr?.on('data', (d) => onProgress({ type: 'log', text: d.toString().trim() }));
     proc.on('close', (code) => {
@@ -90,6 +94,7 @@ function runPip(args, onProgress, timeoutMs = 600000) {
   const python = getPythonPath();
   return new Promise((resolve, reject) => {
     const proc = spawn(python, ['-m', 'pip', ...args], {
+      windowsHide: true,
       env: {
         ...process.env,
         PYTHONIOENCODING: 'utf-8',
@@ -177,8 +182,13 @@ async function installOpenWebUI(onProgress) {
 
   while (retries < maxRetries) {
     try {
+      // On retry, bypass pip cache — corrupted partial downloads are a common
+      // Windows failure mode (AV interference, antivirus quarantine, disk full).
+      const pipArgs = retries === 0
+        ? ['install', 'open-webui']
+        : ['install', '--no-cache-dir', '--force-reinstall', 'open-webui'];
       await runPip(
-        ['install', 'open-webui'],
+        pipArgs,
         onProgress,
         900000 // 15 min timeout — open-webui has many deps
       );
@@ -215,7 +225,7 @@ async function checkInstallation() {
   const python = getPythonPath();
   if (!fileExists(python)) return false;
   try {
-    await execFileAsync(python, ['-c', 'import open_webui'], { timeout: 15000 });
+    await execFileAsync(python, ['-c', 'import open_webui'], { timeout: 15000, windowsHide: true });
     return true;
   } catch (_) {
     return false;
@@ -232,7 +242,7 @@ async function getInstalledVersion() {
     const { stdout } = await execFileAsync(
       python,
       ['-c', 'import importlib.metadata; print(importlib.metadata.version("open-webui"))'],
-      { timeout: 10000 }
+      { timeout: 10000, windowsHide: true }
     );
     return stdout.trim();
   } catch (_) {

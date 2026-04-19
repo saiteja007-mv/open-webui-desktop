@@ -79,10 +79,33 @@ function parseVersion(versionStr) {
 // ── Python probing ────────────────────────────────────────────────────────────
 
 /**
+ * Detect Microsoft Store Python app-execution aliases. These are 0-byte (or tiny)
+ * reparse points in WindowsApps that open the Store when run, and hang or return
+ * nothing when probed non-interactively. They must never be treated as real Python.
+ */
+function isWindowsStoreStub(pythonPath) {
+  if (!isWindows || !pythonPath) return false;
+  const lower = pythonPath.toLowerCase();
+  if (!lower.includes('\\microsoft\\windowsapps\\')) return false;
+  try {
+    const stat = fs.statSync(pythonPath);
+    // Real python.exe is ~100 KB+; Store stubs are 0 bytes or reparse points
+    if (stat.size < 1024) return true;
+  } catch (_) {
+    return true;
+  }
+  return false;
+}
+
+/**
  * Test a Python binary: runs --version, returns version info if supported.
  */
 async function probePython(pythonPath) {
   try {
+    if (isWindowsStoreStub(pythonPath)) {
+      log(`Skipping Microsoft Store Python stub at ${pythonPath}`);
+      return null;
+    }
     const quoted = `"${pythonPath}"`;
     const { stdout, stderr } = await shellExec(`${quoted} --version`, { timeout: 8000 });
     const raw = (stdout || stderr || '').trim();
@@ -113,7 +136,7 @@ async function checkPyLauncher(ver) {
 
     const { stdout: pathOut } = await shellExec(`py -${ver} -c "import sys; print(sys.executable)"`, { timeout: 8000 });
     const pythonPath = pathOut.trim();
-    if (pythonPath && fileExists(pythonPath)) {
+    if (pythonPath && fileExists(pythonPath) && !isWindowsStoreStub(pythonPath)) {
       log(`Found Python ${parsed.full} via py launcher at ${pythonPath}`);
       return { path: pythonPath, version: parsed.full };
     }
@@ -161,23 +184,28 @@ async function checkPython() {
       ];
 
   for (const candidate of candidates) {
-    // Resolve via where/which first
-    let resolved = candidate;
+    // Resolve via where/which first. On Windows, "where" returns ALL matches —
+    // try each, not only the first, so Store stubs don't poison the lookup.
+    let resolvedPaths = [];
     if (!path.isAbsolute(candidate)) {
       try {
         const cmd = isWindows ? `where "${candidate}"` : `which "${candidate}"`;
         const { stdout } = await shellExec(cmd, { timeout: 5000 });
-        resolved = stdout.trim().split('\n')[0].trim();
-        if (!resolved) continue;
+        resolvedPaths = stdout.split('\n').map(s => s.trim()).filter(Boolean);
+        if (resolvedPaths.length === 0) continue;
       } catch (_) {
         continue;
       }
     } else if (!fileExists(candidate)) {
       continue;
+    } else {
+      resolvedPaths = [candidate];
     }
 
-    const result = await probePython(resolved);
-    if (result) return { found: true, ...result, inVenv: false };
+    for (const resolved of resolvedPaths) {
+      const result = await probePython(resolved);
+      if (result) return { found: true, ...result, inVenv: false };
+    }
   }
 
   return { found: false };
@@ -221,12 +249,22 @@ function downloadFile(url, dest) {
 }
 
 /**
- * Extract uv.exe from the downloaded zip using tar.exe (built in to Windows 10+).
+ * Extract uv.exe from the downloaded zip. Tries tar.exe first (Windows 10 1803+),
+ * falls back to PowerShell's Expand-Archive (available since Windows 8.1) for
+ * older / stripped-down systems where tar.exe is missing.
  */
 async function extractUv(zipPath, destDir) {
   ensureDir(destDir);
-  // tar on Windows (10+) can extract zip files; uv zip has files at root level
-  await shellExec(`tar -xf "${zipPath}" -C "${destDir}"`, { timeout: 30000 });
+  try {
+    await shellExec(`tar -xf "${zipPath}" -C "${destDir}"`, { timeout: 30000 });
+    if (fileExists(getUvPath())) return;
+    log('tar extraction produced no uv.exe — trying PowerShell fallback');
+  } catch (err) {
+    log(`tar extraction failed (${err.message}); trying PowerShell fallback`);
+  }
+  // PowerShell Expand-Archive fallback
+  const ps = `powershell -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -Path '${zipPath}' -DestinationPath '${destDir}' -Force"`;
+  await shellExec(ps, { timeout: 60000 });
 }
 
 /**
@@ -290,6 +328,7 @@ async function installPythonWithUv(uvPath, onProgress) {
       shell: true,
       env: getEnv(),
       stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
     });
     proc.stdout?.on('data', d => onProgress({ type: 'log', text: d.toString().trim() }));
     proc.stderr?.on('data', d => onProgress({ type: 'log', text: d.toString().trim() }));
