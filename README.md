@@ -30,16 +30,27 @@ Open WebUI Desktop wraps the full [Open WebUI](https://github.com/open-webui/ope
 
 ## 📥 Download
 
+> **Always grab the latest:** the links below point to `releases/latest`, so they auto-resolve to the newest version even after a new release ships. Filenames in the table reflect **v1.2.5**.
+
 | Platform | Installer | Format |
 |----------|-----------|--------|
-| 🪟 **Windows** | [Open.WebUI.Desktop.Setup.1.2.0.exe](https://github.com/saiteja007-mv/open-webui-desktop/releases/latest) | NSIS one-click installer |
-| 🪟 **Windows Portable** | [Open.WebUI.Desktop.1.2.0.exe](https://github.com/saiteja007-mv/open-webui-desktop/releases/latest) | No install required |
-| 🍎 **macOS (Intel)** | [Open.WebUI.Desktop-1.2.0.dmg](https://github.com/saiteja007-mv/open-webui-desktop/releases/latest) | DMG disk image |
-| 🍎 **macOS (Apple Silicon)** | [Open.WebUI.Desktop-1.2.0-arm64.dmg](https://github.com/saiteja007-mv/open-webui-desktop/releases/latest) | DMG disk image |
-| 🐧 **Linux (Debian/Ubuntu)** | [open-webui-desktop_1.2.0_amd64.deb](https://github.com/saiteja007-mv/open-webui-desktop/releases/latest) | `.deb` package |
-| 🐧 **Linux (AppImage)** | [Open.WebUI.Desktop-1.2.0.AppImage](https://github.com/saiteja007-mv/open-webui-desktop/releases/latest) | Portable AppImage |
+| 🪟 **Windows** | [Open.WebUI.Desktop.Setup.1.2.5.exe](https://github.com/saiteja007-mv/open-webui-desktop/releases/latest) | NSIS one-click installer |
+| 🪟 **Windows Portable** | [Open.WebUI.Desktop.1.2.5.exe](https://github.com/saiteja007-mv/open-webui-desktop/releases/latest) | No install required |
+| 🍎 **macOS (Intel)** | [Open.WebUI.Desktop-1.2.5.dmg](https://github.com/saiteja007-mv/open-webui-desktop/releases/latest) | DMG disk image |
+| 🍎 **macOS (Apple Silicon)** | [Open.WebUI.Desktop-1.2.5-arm64.dmg](https://github.com/saiteja007-mv/open-webui-desktop/releases/latest) | DMG disk image |
+| 🐧 **Linux (Debian/Ubuntu)** | [open-webui-desktop_1.2.5_amd64.deb](https://github.com/saiteja007-mv/open-webui-desktop/releases/latest) | `.deb` package |
+| 🐧 **Linux (AppImage)** | [Open.WebUI.Desktop-1.2.5.AppImage](https://github.com/saiteja007-mv/open-webui-desktop/releases/latest) | Portable AppImage |
 
 > **Linux note:** After `dpkg -i`, the post-install script automatically fixes sandbox permissions and creates the `/usr/bin/open-webui-desktop` launcher. No manual steps required.
+
+### What's new in v1.2.5
+
+- ⚡ **Server starts in ~60 seconds on first launch** (down from the 120s timeout that previously failed). No HuggingFace model downloads on boot — local embeddings, reranker, Whisper, and image-gen are deferred until you enable them in **Admin → Settings**.
+- 🪟 **Windows install reliability** — Microsoft Store Python aliases are now ignored, `tar.exe` extraction falls back to PowerShell, and pip retries use `--no-cache-dir` to survive antivirus interference.
+- 🐍 **Real-time logs** — server output is unbuffered (`PYTHONUNBUFFERED=1`) and spawned via `python -u` directly, bypassing the `open-webui.exe` launcher's stdout buffer.
+- 🚫 **No more silent stalls** — added a 90s stall detector that surfaces a clear error if the server stops producing output, instead of waiting for a hard timeout.
+
+See the [release notes](https://github.com/saiteja007-mv/open-webui-desktop/releases) for the full v1.2.1 → v1.2.5 changelog.
 
 ---
 
@@ -181,7 +192,7 @@ sequenceDiagram
     participant P as linux-postinstall.sh
     participant S as System
 
-    U->>D: sudo dpkg -i open-webui-desktop_1.2.0_amd64.deb
+    U->>D: sudo dpkg -i open-webui-desktop_1.2.5_amd64.deb
     D->>S: Extract files to /opt/Open WebUI Desktop/
     D->>P: Run post-install script (as root)
     P->>S: Detect install dir (handles spaces in path)
