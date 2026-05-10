@@ -139,20 +139,43 @@ async function startServer() {
     WEBUI_SECRET_KEY: secretKey,
     PORT: String(serverPort),
     HOST: '127.0.0.1',
-    // ── Fast-start: skip HuggingFace model downloads on launch ─────────────
-    // Open WebUI otherwise fetches ~90MB (sentence-transformers/all-MiniLM-L6-v2
-    // + a reranker) during lifespan startup, which adds minutes to first-run.
-    // Switching the embedding engine away from the empty default makes it skip
-    // SentenceTransformer load entirely. The user can switch back to local
-    // embeddings from Admin → Settings → Documents once the app is open.
+    // ── Fast-start: skip every blocking init at boot ────────────────────────
+    // Open WebUI otherwise fetches ~90MB of HuggingFace models + spins up
+    // langchain/vector-DB pipelines synchronously in lifespan, blocking the
+    // HTTP port for 1–3 minutes on first run. Each flag below disables ONE
+    // blocking step — the user can re-enable any of them from
+    // Admin → Settings → {Documents, Web Search, Audio} once the app is open.
+
+    // 1) Embedding + reranking: switch engine off "" so SentenceTransformer
+    //    is never instantiated at startup (no HF download, no torch warmup).
     RAG_EMBEDDING_ENGINE: 'ollama',
     RAG_RERANKING_ENGINE: 'ollama',
     RAG_EMBEDDING_MODEL_AUTO_UPDATE: 'False',
     RAG_RERANKING_MODEL_AUTO_UPDATE: 'False',
-    // Don't auto-pull LLM models either on first boot
-    OFFLINE_MODE: 'False', // keep API calls possible; only block auto-model-pulls
-    // Silence the Windows symlink cache warning that spams stderr first run
+
+    // 2) Skip RAG pipeline init: hybrid search builds an in-memory BM25
+    //    index, web search loaders pull external pages, content extraction
+    //    requires playwright. None are needed for the chat UI to come up.
+    ENABLE_RAG_HYBRID_SEARCH: 'False',
+    ENABLE_RAG_WEB_SEARCH: 'False',
+    ENABLE_RAG_LOCAL_WEB_FETCH: 'False',
+
+    // 3) Skip audio model load (Whisper + TTS download large checkpoints).
+    WHISPER_MODEL_AUTO_UPDATE: 'False',
+    AUDIO_STT_ENGINE: 'openai',
+    AUDIO_TTS_ENGINE: 'openai',
+
+    // 4) Skip image-gen probe.
+    ENABLE_IMAGE_GENERATION: 'False',
+
+    // 5) Block any leftover HF download paths and silence symlink warnings.
+    HF_HUB_OFFLINE: '1',
+    TRANSFORMERS_OFFLINE: '1',
     HF_HUB_DISABLE_SYMLINKS_WARNING: '1',
+
+    // 6) Don't probe Ollama/OpenAI on startup — the URLs are still saved and
+    //    requests are made lazily when the user actually sends a message.
+    OFFLINE_MODE: 'False',
   };
 
   // Prefer the open-webui CLI script installed in the venv (correct entry point).
