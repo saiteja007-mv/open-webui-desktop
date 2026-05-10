@@ -1,6 +1,6 @@
 {
   "name": "open-webui-desktop",
-  "version": "1.2.4",
+  "version": "1.2.5",
   "productName": "Open WebUI Desktop",
   "description": "Standalone desktop app for Open WebUI — automatically installs and runs the AI interface.",
   "author": {
