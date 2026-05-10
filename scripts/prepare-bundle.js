@@ -124,10 +124,27 @@ async function buildVenv(uvBin) {
     throw new Error(`venv python missing at ${pyBin}`);
   }
 
+  // Pre-install CPU-only torch FIRST so the open-webui install below sees the
+  // dependency as already satisfied and skips the default GPU-enabled wheels.
+  // Default torch on Linux/Windows is ~700 MB (includes CUDA libs); CPU-only
+  // is ~200 MB. This is what keeps the installer under GitHub's 2 GB asset
+  // size limit. The desktop app doesn't need GPU support — model inference
+  // happens via Ollama / OpenAI / etc., not local torch.
+  log('Pre-installing CPU-only torch...');
+  run(uvBin, [
+    'pip', 'install',
+    '--python', pyBin,
+    '--index-url', 'https://download.pytorch.org/whl/cpu',
+    'torch', 'torchvision', 'torchaudio',
+  ]);
+
   log('Installing open-webui (this may take several minutes)...');
   run(uvBin, [
     'pip', 'install',
     '--python', pyBin,
+    // Reuse the already-installed CPU torch instead of pulling GPU wheels.
+    '--extra-index-url', 'https://download.pytorch.org/whl/cpu',
+    '--index-strategy', 'unsafe-best-match',
     'open-webui',
   ]);
 
@@ -139,8 +156,22 @@ async function buildVenv(uvBin) {
 // ─── Slim down the bundle ─────────────────────────────────────────────────────
 
 function pruneBundle() {
-  log('Pruning __pycache__ / tests / docs to shrink installer...');
-  const dropDirs = new Set(['__pycache__', 'tests', 'test', 'examples', 'docs']);
+  log('Pruning caches / tests / docs / unused torch backends...');
+  const dropDirs = new Set([
+    '__pycache__',
+    'tests', 'test', 'testing',
+    'examples', 'example',
+    'docs', 'doc',
+    'benchmarks',
+  ]);
+  // Heavy paths inside torch we don't need without GPU
+  const dropTorchSubpaths = [
+    path.join('torch', 'test'),
+    path.join('torch', 'testing'),
+    path.join('torch', 'include'),         // C++ headers, ~200 MB
+    path.join('torch', 'distributed', 'elastic', 'tests'),
+    path.join('torch', 'utils', 'tensorboard'),
+  ];
   function walk(dir) {
     let entries;
     try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
@@ -159,6 +190,36 @@ function pruneBundle() {
     }
   }
   walk(VENV_DIR);
+
+  // Hardcoded torch sub-tree drops (idempotent across platforms — venv layout
+  // varies but site-packages/torch/* is consistent)
+  const sitePkgs = IS_WIN
+    ? path.join(VENV_DIR, 'Lib', 'site-packages')
+    : path.join(VENV_DIR, 'lib');
+  function findSitePackages(root) {
+    if (!fs.existsSync(root)) return [];
+    if (IS_WIN) return [root];
+    // unix: lib/python3.11/site-packages
+    const out = [];
+    try {
+      for (const e of fs.readdirSync(root, { withFileTypes: true })) {
+        if (e.isDirectory() && /^python3/.test(e.name)) {
+          const sp = path.join(root, e.name, 'site-packages');
+          if (fs.existsSync(sp)) out.push(sp);
+        }
+      }
+    } catch (_) {}
+    return out;
+  }
+  for (const sp of findSitePackages(sitePkgs)) {
+    for (const sub of dropTorchSubpaths) {
+      const target = path.join(sp, sub);
+      if (fs.existsSync(target)) {
+        log(`  drop ${path.relative(VENV_DIR, target)}`);
+        rmrf(target);
+      }
+    }
+  }
 }
 
 function reportSize() {
