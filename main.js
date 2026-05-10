@@ -447,9 +447,25 @@ app.whenReady().then(async () => {
   registerIpcHandlers();
   setupServerEventForwarding();
 
-  // Determine startup page
-  const setupComplete = store.get('setupComplete');
-  const installed = setupComplete ? await venvManager.checkInstallation() : false;
+  // Determine startup page.
+  //
+  // If this build ships a pre-bundled venv (extraResources/venv), the app is
+  // standalone — no setup wizard needed regardless of stored state. The
+  // bundled venv has open-webui already installed and ready to run.
+  let installed;
+  if (utils.isBundled()) {
+    installed = await venvManager.checkInstallation();
+    if (installed) {
+      // Auto-mark setup complete so legacy code paths agree
+      store.set('setupComplete', true);
+      utils.log(`Using bundled venv at ${utils.getBundledVenvPath()}`);
+    } else {
+      utils.log('Bundle present but checkInstallation failed — falling through to setup wizard');
+    }
+  } else {
+    const setupComplete = store.get('setupComplete');
+    installed = setupComplete ? await venvManager.checkInstallation() : false;
+  }
 
   if (installed) {
     createWindow('app.html');

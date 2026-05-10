@@ -23,8 +23,49 @@ function getAppDataPath() {
   return path.join(os.homedir(), '.local', 'share', 'open-webui-desktop');
 }
 
-function getVenvPath() {
+/**
+ * Resources dir: where electron-builder's `extraResources` get unpacked.
+ *  - In a packaged app: process.resourcesPath (e.g. .../resources/)
+ *  - In dev (npm start): repo root, so bundle/ in the source tree resolves
+ */
+function getResourcesPath() {
+  if (process.resourcesPath && fs.existsSync(process.resourcesPath)) {
+    return process.resourcesPath;
+  }
+  return path.resolve(__dirname, '..');
+}
+
+/**
+ * Bundled venv path. Present iff this build was produced with
+ * `npm run prepare-bundle` and shipped via electron-builder's extraResources.
+ */
+function getBundledVenvPath() {
+  // packaged: <resources>/venv/    (extraResources -> "venv")
+  // dev:      <repo>/bundle/venv/  (output of prepare-bundle.js)
+  const packaged = path.join(getResourcesPath(), 'venv');
+  if (fs.existsSync(packaged)) return packaged;
+  const dev = path.join(getResourcesPath(), 'bundle', 'venv');
+  if (fs.existsSync(dev)) return dev;
+  return null;
+}
+
+function isBundled() {
+  return getBundledVenvPath() !== null;
+}
+
+/**
+ * User-data venv path (legacy first-run setup wizard fallback).
+ */
+function getUserDataVenvPath() {
   return path.join(getAppDataPath(), 'venv');
+}
+
+/**
+ * Active venv path. Bundled venv wins; falls back to user-data venv if the
+ * app was installed without a bundle (legacy build or dev without prepare).
+ */
+function getVenvPath() {
+  return getBundledVenvPath() || getUserDataVenvPath();
 }
 
 function getPythonPath() {
@@ -129,6 +170,10 @@ module.exports = {
   isMac,
   isLinux,
   getAppDataPath,
+  getResourcesPath,
+  getBundledVenvPath,
+  isBundled,
+  getUserDataVenvPath,
   getVenvPath,
   getPythonPath,
   getPipPath,

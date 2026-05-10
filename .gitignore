@@ -3,3 +3,7 @@ dist/
 .venv/
 *.log
 .webui_secret_key
+
+# Build-time Python bundle (produced by scripts/prepare-bundle.js).
+# Several hundred MB — never commit; CI rebuilds it per platform.
+bundle/
